@@ -32,7 +32,12 @@ if (!WEBHOOK_URL) {
       await editWebhookMessage(WEBHOOK_URL, MESSAGE_ID, { content: null, embeds: [embed] });
       console.log("Edited message:", MESSAGE_ID);
     } else {
-      const created = await createWebhookMessage(WEBHOOK_URL, { content: null, embeds: [embed] }, true);
+      // FIRST RUN: create a visible message + embed, and log its ID
+      const created = await createWebhookMessage(
+        WEBHOOK_URL,
+        { content: "TD2 Vendors — initializing…", embeds: [embed] },
+        true
+      );
       if (created?.id) {
         console.log("FIRST RUN: created message id:", created.id);
         console.log("→ Add this ID as GitHub Secret DISCORD_MESSAGE_ID to enable editing instead of new posts.");
@@ -127,13 +132,9 @@ function currentAndNextWindow(nowMs) {
   const nextOpenStart = currentOpenStart + cycleMs;
   const nextCloseEnd = nextOpenStart + openMs;
 
-  const nowSec = Math.floor(nowMs / 1000);
-  const openStartSec = Math.floor(currentOpenStart / 1000);
-  const closeEndSec = Math.floor(currentCloseEnd / 1000);
-
   return {
-    openStart: openStartSec,
-    closeEnd: closeEndSec,
+    openStart: Math.floor(currentOpenStart / 1000),
+    closeEnd: Math.floor(currentCloseEnd / 1000),
     nextOpenStart: Math.floor(nextOpenStart / 1000),
     nextCloseEnd: Math.floor(nextCloseEnd / 1000),
   };
@@ -173,18 +174,33 @@ function tzOffsetMinutes(timeZone, epochMs) {
   const dtf = getDTF(timeZone);
   const parts = dtf.formatToParts(new Date(epochMs));
   const map = Object.fromEntries(parts.map(p => [p.type, p.value]));
-  const asUtc = Date.UTC(Number(map.year), Number(map.month) - 1, Number(map.day), Number(map.hour), Number(map.minute), Number(map.second));
+  const asUtc = Date.UTC(
+    Number(map.year),
+    Number(map.month) - 1,
+    Number(map.day),
+    Number(map.hour),
+    Number(map.minute),
+    Number(map.second)
+  );
   return (asUtc - epochMs) / 60000;
 }
 
 const dtfCache = new Map();
 function getDTF(timeZone) {
   if (!dtfCache.has(timeZone)) {
-    dtfCache.set(timeZone, new Intl.DateTimeFormat("en-US", {
-      timeZone, hour12: false,
-      year: "numeric", month: "2-digit", day: "2-digit",
-      hour: "2-digit", minute: "2-digit", second: "2-digit",
-    }));
+    dtfCache.set(
+      timeZone,
+      new Intl.DateTimeFormat("en-US", {
+        timeZone,
+        hour12: false,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      })
+    );
   }
   return dtfCache.get(timeZone);
 }
@@ -215,4 +231,3 @@ async function editWebhookMessage(webhookUrl, messageId, body) {
   if (!res.ok) throw new Error(`Webhook PATCH failed: ${res.status}`);
   return true;
 }
-
