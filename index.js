@@ -1,11 +1,15 @@
 // The Division 2 — Vendors Status (Deterministic cron, GH Actions)
-// Adds ALL vendors + fixed DD:HH:MM countdowns (updated each run).
+// Self-healing: if PATCH fails (bad/old MESSAGE_ID), it POSTs a new message and logs its ID.
 
 const WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
-const MESSAGE_ID  = process.env.DISCORD_MESSAGE_ID || "";
+let MESSAGE_ID  = (process.env.DISCORD_MESSAGE_ID || "").trim();
 if (!WEBHOOK_URL) { console.error("Missing DISCORD_WEBHOOK_URL"); process.exit(1); }
+if (MESSAGE_ID && !/^\d+$/.test(MESSAGE_ID)) {
+  console.warn("WARN: DISCORD_MESSAGE_ID contains non-digits, trimming.");
+  MESSAGE_ID = MESSAGE_ID.replace(/\D/g, "");
+}
 
-/* ---- TZ helpers (define cache FIRST) ---- */
+/* ---- TZ helpers (cache FIRST) ---- */
 const dtfCache = new Map();
 function getDTF(timeZone){
   if(!dtfCache.has(timeZone)){
@@ -18,8 +22,7 @@ function addDays(parts,days,tz){const base=Date.UTC(parts.year,parts.month-1,par
 function tzOffsetMinutes(tz,epochMs){const m=Object.fromEntries(getDTF(tz).formatToParts(new Date(epochMs)).map(p=>[p.type,p.value]));const asUtc=Date.UTC(+m.year,+m.month-1,+m.day,+m.hour,+m.minute,+m.second);return (asUtc-epochMs)/60000;}
 function zonedDateToUnix(parts,tz){const guess=Date.UTC(parts.year,parts.month-1,parts.day,parts.hour??0,parts.minute??0,parts.second??0);const ms=guess - tzOffsetMinutes(tz,guess)*60000;return Math.floor(ms/1000);}
 
-/* ---- Business time rules ---- */
-// Weekly reset — pokazujmy jako „Warsaw 09:30”, Discord i tak zrenderuje lokalnie.
+/* ---- Business rules ---- */
 function nextWeeklyReset(nowMs){
   const tz="Europe/Warsaw";
   const now=toZonedParts(new Date(nowMs),tz);
@@ -36,7 +39,6 @@ function nextWeeklyReset(nowMs){
   return zonedDateToUnix(target,tz);
 }
 
-// Cassie/Danny cycle: 24h OPEN / 32h CLOSED, anchor: Wed 03:00 ET weekly
 function currentAndNextWindow(nowMs){
   const tz="America/New_York";
   const nowEt=toZonedParts(new Date(nowMs),tz);
@@ -58,19 +60,17 @@ function currentAndNextWindow(nowMs){
   };
 }
 
-/* ---- Formatting ---- */
+/* ---- Countdown helpers ---- */
 function fmtDDHHMM(seconds){
   if(seconds<0) seconds=0;
   const d=Math.floor(seconds/86400);
   const h=Math.floor((seconds%86400)/3600);
   const m=Math.floor((seconds%3600)/60);
-  const dd=String(d).padStart(2,"0");
-  const hh=String(h).padStart(2,"0");
-  const mm=String(m).padStart(2,"0");
-  return `${dd}:${hh}:${mm`;
+  return `${String(d).padStart(2,"0")}:${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}`;
 }
 function secondsUntil(unix){ return unix - Math.floor(Date.now()/1000); }
 
+/* ---- Description ---- */
 function buildDescription(resetUnix, cassie, danny){
   const nowSec=Math.floor(Date.now()/1000);
   const toReset=secondsUntil(resetUnix);
@@ -79,22 +79,18 @@ function buildDescription(resetUnix, cassie, danny){
     "Dark Zone East","Dark Zone South","Dark Zone West"
   ];
   const vendorsNY=[ "Haven (NYC)" ];
-  const specials=[ "Pentagon" ]; // reset-based; placeholder if potrzebujesz
+  const specials=[ "Pentagon" ];
 
   const lines=[];
-  // Header
   lines.push("**Weekly Vendor Reset**");
   lines.push(`Next reset: <t:${resetUnix}:F> — <t:${resetUnix}:R>  \nCountdown (DD:HH:MM): \`${fmtDDHHMM(toReset)}\``);
 
-  // DC group (all tied to weekly reset)
   lines.push("\n**Washington D.C. Vendors**");
   lines.push(vendorsDC.map(v=>`• ${v} — refresh in \`${fmtDDHHMM(toReset)}\``).join("\n"));
 
-  // NYC group
   lines.push("\n**New York Vendors**");
   lines.push(vendorsNY.map(v=>`• ${v} — refresh in \`${fmtDDHHMM(toReset)}\``).join("\n"));
 
-  // Cassie
   const cassieOpenNow = nowSec>=cassie.openStart && nowSec<cassie.closeEnd;
   lines.push("\n**Cassie Mendoza**");
   if(cassieOpenNow){
@@ -111,7 +107,6 @@ function buildDescription(resetUnix, cassie, danny){
     );
   }
 
-  // Danny
   const dannyOpenNow = nowSec>=danny.openStart && nowSec<danny.closeEnd;
   lines.push("\n**Danny Weaver**");
   if(dannyOpenNow){
@@ -128,11 +123,6 @@ function buildDescription(resetUnix, cassie, danny){
     );
   }
 
-  // Specials (reset-based)
-  lines.push("\n**Specials**");
-  lines.push(specials.map(v=>`• ${v} — refresh in \`${fmtDDHHMM(toReset)}\``).join("\n"));
-
-  // Links
   lines.push(
     "\n**Useful links**\n"+
     "• Weekly list (Ruben Alamina): https://rubenalamina.mx/the-division-weekly-vendor-reset/\n"+
@@ -141,7 +131,7 @@ function buildDescription(resetUnix, cassie, danny){
   return lines.join("\n");
 }
 
-/* ---- Discord I/O ---- */
+/* ---- Main ---- */
 (async ()=>{
   try{
     const nowMs=Date.now();
@@ -157,8 +147,19 @@ function buildDescription(resetUnix, cassie, danny){
     };
 
     if(MESSAGE_ID){
-      await editWebhookMessage(WEBHOOK_URL,MESSAGE_ID,{content:null,embeds:[embed]});
-      console.log("Edited message:", MESSAGE_ID);
+      try{
+        await editWebhookMessage(WEBHOOK_URL,MESSAGE_ID,{content:null,embeds:[embed]});
+        console.log("Edited message:", MESSAGE_ID);
+      }catch(e){
+        console.warn("PATCH failed, posting new message. Reason:", e.message || e);
+        const created=await createWebhookMessage(WEBHOOK_URL,{content:"TD2 Vendors — initializing…",embeds:[embed]},true);
+        if(created?.id){
+          console.log("NEW MESSAGE ID:", created.id);
+          console.log("→ Update your DISCORD_MESSAGE_ID secret to this value.");
+        }else{
+          console.log("Posted new message (no ID returned).");
+        }
+      }
     }else{
       const created=await createWebhookMessage(WEBHOOK_URL,{content:"TD2 Vendors — initializing…",embeds:[embed]},true);
       if(created?.id){ console.log("FIRST RUN: created message id:",created.id); }
@@ -168,6 +169,7 @@ function buildDescription(resetUnix, cassie, danny){
   }
 })();
 
+/* ---- Discord helpers ---- */
 async function createWebhookMessage(url, body, waitJson=false){
   const u=new URL(url); if(waitJson) u.searchParams.set("wait","true");
   const res=await fetch(u.toString(),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
