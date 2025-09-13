@@ -19,6 +19,27 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Check secrets presence (no values printed)
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
+            echo "❌ DISCORD_WEBHOOK_URL is EMPTY"; exit 1;
+          else
+            echo "✅ DISCORD_WEBHOOK_URL present (length: $(echo -n "$DISCORD_WEBHOOK_URL" | wc -c))";
+          fi
+
+      - name: Test webhook with curl (once)
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          code=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Content-Type: application/json" \
+            -d '{"content":"TD2 Vendors: health check ✅"}' \
+            "$DISCORD_WEBHOOK_URL")
+          echo "Webhook HTTP:$code"
+          [ "$code" = "204" ] || [ "$code" = "200" ] || (echo "❌ Webhook test failed"; exit 1)
+
       - name: Run script
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
