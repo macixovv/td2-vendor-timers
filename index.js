@@ -1,32 +1,58 @@
 // The Division 2 — Vendors Status (Deterministic cron, GH Actions)
-// Self-healing: if PATCH fails (bad/old MESSAGE_ID), it POSTs a new message and logs its ID.
+// - 1st run (no DISCORD_MESSAGE_ID): POST new message, log its ID
+// - Next runs (with DISCORD_MESSAGE_ID): PATCH same message
 
 const WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL;
-let MESSAGE_ID  = (process.env.DISCORD_MESSAGE_ID || "").trim();
-if (!WEBHOOK_URL) { console.error("Missing DISCORD_WEBHOOK_URL"); process.exit(1); }
-if (MESSAGE_ID && !/^\d+$/.test(MESSAGE_ID)) {
-  console.warn("WARN: DISCORD_MESSAGE_ID contains non-digits, trimming.");
-  MESSAGE_ID = MESSAGE_ID.replace(/\D/g, "");
+const RAW_ID = (process.env.DISCORD_MESSAGE_ID || "").trim();
+let MESSAGE_ID = RAW_ID && /^\d+$/.test(RAW_ID) ? RAW_ID : "";
+
+if (!WEBHOOK_URL) {
+  console.error("Missing DISCORD_WEBHOOK_URL secret");
+  process.exit(1);
 }
 
-/* ---- TZ helpers (cache FIRST) ---- */
+/* ---------- TZ helpers (cache FIRST) ---------- */
 const dtfCache = new Map();
 function getDTF(timeZone){
   if(!dtfCache.has(timeZone)){
-    dtfCache.set(timeZone,new Intl.DateTimeFormat("en-US",{timeZone,hour12:false,year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit"}));
+    dtfCache.set(timeZone, new Intl.DateTimeFormat("en-US", {
+      timeZone, hour12:false,
+      year:"numeric", month:"2-digit", day:"2-digit",
+      hour:"2-digit", minute:"2-digit", second:"2-digit",
+    }));
   }
   return dtfCache.get(timeZone);
 }
-function toZonedParts(date,tz){const p=getDTF(tz).formatToParts(date);const m=Object.fromEntries(p.map(x=>[x.type,x.value]));return{year:+m.year,month:+m.month,day:+m.day,hour:+m.hour,minute:+m.minute,second:+m.second,weekday:new Date(Date.UTC(+m.year,+m.month-1,+m.day)).getUTCDay()};}
-function addDays(parts,days,tz){const base=Date.UTC(parts.year,parts.month-1,parts.day,parts.hour??0,parts.minute??0,parts.second??0);return toZonedParts(new Date(base+days*86400000),tz);}
-function tzOffsetMinutes(tz,epochMs){const m=Object.fromEntries(getDTF(tz).formatToParts(new Date(epochMs)).map(p=>[p.type,p.value]));const asUtc=Date.UTC(+m.year,+m.month-1,+m.day,+m.hour,+m.minute,+m.second);return (asUtc-epochMs)/60000;}
-function zonedDateToUnix(parts,tz){const guess=Date.UTC(parts.year,parts.month-1,parts.day,parts.hour??0,parts.minute??0,parts.second??0);const ms=guess - tzOffsetMinutes(tz,guess)*60000;return Math.floor(ms/1000);}
+function toZonedParts(date,tz){
+  const parts=getDTF(tz).formatToParts(date);
+  const m=Object.fromEntries(parts.map(p=>[p.type,p.value]));
+  return {
+    year:+m.year, month:+m.month, day:+m.day,
+    hour:+m.hour, minute:+m.minute, second:+m.second,
+    weekday:new Date(Date.UTC(+m.year,+m.month-1,+m.day)).getUTCDay() // 0..6
+  };
+}
+function addDays(parts,days,tz){
+  const base=Date.UTC(parts.year,parts.month-1,parts.day,parts.hour??0,parts.minute??0,parts.second??0);
+  return toZonedParts(new Date(base+days*86400000),tz);
+}
+function tzOffsetMinutes(tz,epochMs){
+  const m=Object.fromEntries(getDTF(tz).formatToParts(new Date(epochMs)).map(p=>[p.type,p.value]));
+  const asUtc=Date.UTC(+m.year,+m.month-1,+m.day,+m.hour,+m.minute,+m.second);
+  return (asUtc-epochMs)/60000;
+}
+function zonedDateToUnix(parts,tz){
+  const guess=Date.UTC(parts.year,parts.month-1,parts.day,parts.hour??0,parts.minute??0,parts.second??0);
+  const ms=guess - tzOffsetMinutes(tz,guess)*60000;
+  return Math.floor(ms/1000);
+}
 
-/* ---- Business rules ---- */
+/* ---------- Business rules ---------- */
+// Weekly reset — ustawiamy „Europe/Warsaw 09:30” (Discord i tak przelicza wszystkim lokalnie)
 function nextWeeklyReset(nowMs){
   const tz="Europe/Warsaw";
   const now=toZonedParts(new Date(nowMs),tz);
-  const targetDow=2; // Tue
+  const targetDow=2; // Tuesday
   const dow=now.weekday;
   let delta=(targetDow-dow+7)%7;
   let target={...now,hour:9,minute:30,second:0};
@@ -39,6 +65,7 @@ function nextWeeklyReset(nowMs){
   return zonedDateToUnix(target,tz);
 }
 
+// Cassie/Danny: 24h OPEN / 32h CLOSED (56h), anchor: Wed 03:00 ET (weekly)
 function currentAndNextWindow(nowMs){
   const tz="America/New_York";
   const nowEt=toZonedParts(new Date(nowMs),tz);
@@ -60,7 +87,7 @@ function currentAndNextWindow(nowMs){
   };
 }
 
-/* ---- Countdown helpers ---- */
+/* ---------- Countdown helpers ---------- */
 function fmtDDHHMM(seconds){
   if(seconds<0) seconds=0;
   const d=Math.floor(seconds/86400);
@@ -70,7 +97,7 @@ function fmtDDHHMM(seconds){
 }
 function secondsUntil(unix){ return unix - Math.floor(Date.now()/1000); }
 
-/* ---- Description ---- */
+/* ---------- Embed description ---------- */
 function buildDescription(resetUnix, cassie, danny){
   const nowSec=Math.floor(Date.now()/1000);
   const toReset=secondsUntil(resetUnix);
@@ -79,7 +106,6 @@ function buildDescription(resetUnix, cassie, danny){
     "Dark Zone East","Dark Zone South","Dark Zone West"
   ];
   const vendorsNY=[ "Haven (NYC)" ];
-  const specials=[ "Pentagon" ];
 
   const lines=[];
   lines.push("**Weekly Vendor Reset**");
@@ -131,7 +157,7 @@ function buildDescription(resetUnix, cassie, danny){
   return lines.join("\n");
 }
 
-/* ---- Main ---- */
+/* ---------- Discord I/O ---------- */
 (async ()=>{
   try{
     const nowMs=Date.now();
@@ -147,29 +173,22 @@ function buildDescription(resetUnix, cassie, danny){
     };
 
     if(MESSAGE_ID){
-      try{
-        await editWebhookMessage(WEBHOOK_URL,MESSAGE_ID,{content:null,embeds:[embed]});
-        console.log("Edited message:", MESSAGE_ID);
-      }catch(e){
-        console.warn("PATCH failed, posting new message. Reason:", e.message || e);
-        const created=await createWebhookMessage(WEBHOOK_URL,{content:"TD2 Vendors — initializing…",embeds:[embed]},true);
-        if(created?.id){
-          console.log("NEW MESSAGE ID:", created.id);
-          console.log("→ Update your DISCORD_MESSAGE_ID secret to this value.");
-        }else{
-          console.log("Posted new message (no ID returned).");
-        }
-      }
+      await editWebhookMessage(WEBHOOK_URL,MESSAGE_ID,{content:null,embeds:[embed]});
+      console.log("Edited message:", MESSAGE_ID);
     }else{
       const created=await createWebhookMessage(WEBHOOK_URL,{content:"TD2 Vendors — initializing…",embeds:[embed]},true);
-      if(created?.id){ console.log("FIRST RUN: created message id:",created.id); }
+      if(created?.id){
+        console.log("FIRST RUN: created message id:", created.id);
+        console.log("→ Add this ID as GitHub Secret DISCORD_MESSAGE_ID to enable editing instead of new posts.");
+      }else{
+        console.log("Posted new message (no ID returned).");
+      }
     }
   }catch(err){
     console.error("FATAL:", err?.stack||err); process.exit(1);
   }
 })();
 
-/* ---- Discord helpers ---- */
 async function createWebhookMessage(url, body, waitJson=false){
   const u=new URL(url); if(waitJson) u.searchParams.set("wait","true");
   const res=await fetch(u.toString(),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
@@ -186,3 +205,4 @@ async function editWebhookMessage(url, messageId, body){
   if(!res.ok) throw new Error(`Webhook PATCH failed: ${res.status} ${txt}`);
   return true;
 }
+
