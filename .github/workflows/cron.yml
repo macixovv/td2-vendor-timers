@@ -2,8 +2,8 @@ name: TD2 Vendors Status
 
 on:
   schedule:
-    - cron: "*/30 * * * *" # co 30 min
-  workflow_dispatch: {}     # ręczne odpalenie z UI
+    - cron: "*/5 * * * *"   # co 5 minut
+  workflow_dispatch: {}      # ręczne odpalenie z UI
 
 jobs:
   run:
@@ -18,29 +18,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "20"
-
-      # --- DIAGNOSTYKA 1: czy sekret istnieje (nie wypisujemy wartości) ---
-      - name: Check secrets presence (no values printed)
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: |
-          if [ -z "$DISCORD_WEBHOOK_URL" ]; then
-            echo "❌ DISCORD_WEBHOOK_URL is EMPTY (secret missing or wrong name)"; exit 1;
-          else
-            echo "✅ DISCORD_WEBHOOK_URL present. length=$(echo -n "$DISCORD_WEBHOOK_URL" | wc -c)";
-          fi
-
-      # --- DIAGNOSTYKA 2: prosty test webhooka curl ---
-      - name: Test webhook with curl (temporary)
-        env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
-        run: |
-          code=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Content-Type: application/json" \
-            -d '{"content":"TD2 Vendors: test from GitHub Actions"}' \
-            "$DISCORD_WEBHOOK_URL")
-          echo "Webhook HTTP:$code"
-          [ "$code" = "204" ] || [ "$code" = "200" ] || (echo "❌ Webhook test failed"; exit 1)
 
       - name: Run script
         env:
