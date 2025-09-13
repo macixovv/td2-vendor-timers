@@ -1,0 +1,28 @@
+name: TD2 Vendors Status
+
+on:
+  schedule:
+    - cron: "*/30 * * * *" # co 30 min
+  workflow_dispatch: {}     # ręczne odpalenie z UI
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout (empty workspace ok)
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run script
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_MESSAGE_ID:  ${{ secrets.DISCORD_MESSAGE_ID }}
+        run: |
+          node -e "require('fs').existsSync('index.js')||process.exit(1)"
+          node index.js
