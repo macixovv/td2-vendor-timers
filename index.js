@@ -1,6 +1,5 @@
 // The Division 2 – Vendors Status (Variant A: deterministic cron)
 // Runs on GitHub Actions (Node 20). No scraping. Edits ONE Discord webhook message.
-// First run (no DISCORD_MESSAGE_ID): posts a new message and prints its ID in logs.
 
 const WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL; // required (secret)
 const MESSAGE_ID  = process.env.DISCORD_MESSAGE_ID || ""; // optional (secret)
@@ -10,6 +9,73 @@ if (!WEBHOOK_URL) {
   process.exit(1);
 }
 
+/** ---- DTF cache MUST be defined before any function uses it ---- */
+const dtfCache = new Map();
+function getDTF(timeZone) {
+  if (!dtfCache.has(timeZone)) {
+    dtfCache.set(
+      timeZone,
+      new Intl.DateTimeFormat("en-US", {
+        timeZone,
+        hour12: false,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+      })
+    );
+  }
+  return dtfCache.get(timeZone);
+}
+
+/** ---- Lightweight TZ helpers (no external libs) ---- */
+function toZonedParts(date, timeZone) {
+  const dtf = getDTF(timeZone);
+  const parts = dtf.formatToParts(date);
+  const map = Object.fromEntries(parts.map(p => [p.type, p.value]));
+  return {
+    year: Number(map.year),
+    month: Number(map.month),
+    day: Number(map.day),
+    hour: Number(map.hour),
+    minute: Number(map.minute),
+    second: Number(map.second),
+    weekday: new Date(Date.UTC(Number(map.year), Number(map.month) - 1, Number(map.day))).getUTCDay(), // 0..6
+  };
+}
+
+function addDaysEt(parts, days) {
+  const base = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour ?? 0, parts.minute ?? 0, parts.second ?? 0);
+  const d2 = new Date(base + days * 86400000);
+  const tz = "America/New_York";
+  return toZonedParts(d2, tz);
+}
+
+function zonedDateToUnix(parts, timeZone) {
+  const guess = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour ?? 0, parts.minute ?? 0, parts.second ?? 0);
+  const offsetMin = tzOffsetMinutes(timeZone, guess);
+  const ms = guess - offsetMin * 60000;
+  return Math.floor(ms / 1000);
+}
+
+function tzOffsetMinutes(timeZone, epochMs) {
+  const dtf = getDTF(timeZone);
+  const parts = dtf.formatToParts(new Date(epochMs));
+  const map = Object.fromEntries(parts.map(p => [p.type, p.value]));
+  const asUtc = Date.UTC(
+    Number(map.year),
+    Number(map.month) - 1,
+    Number(map.day),
+    Number(map.hour),
+    Number(map.minute),
+    Number(map.second)
+  );
+  return (asUtc - epochMs) / 60000;
+}
+
+/** -------------------------------- Main -------------------------------- */
 (async () => {
   try {
     const nowMs = Date.now();
@@ -50,6 +116,7 @@ if (!WEBHOOK_URL) {
   }
 })();
 
+/** --------------------------- Business logic --------------------------- */
 function buildDescription(resetUnix, cassie, danny) {
   const lines = [];
   lines.push(
@@ -137,71 +204,6 @@ function currentAndNextWindow(nowMs) {
     nextOpenStart: Math.floor(nextOpenStart / 1000),
     nextCloseEnd: Math.floor(nextCloseEnd / 1000),
   };
-}
-
-/** ---- Lightweight TZ helpers (no external libs) ---- */
-function toZonedParts(date, timeZone) {
-  const dtf = getDTF(timeZone);
-  const parts = dtf.formatToParts(date);
-  const map = Object.fromEntries(parts.map(p => [p.type, p.value]));
-  return {
-    year: Number(map.year),
-    month: Number(map.month),
-    day: Number(map.day),
-    hour: Number(map.hour),
-    minute: Number(map.minute),
-    second: Number(map.second),
-    weekday: new Date(Date.UTC(Number(map.year), Number(map.month) - 1, Number(map.day))).getUTCDay(), // 0..6
-  };
-}
-
-function addDaysEt(parts, days) {
-  const base = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour ?? 0, parts.minute ?? 0, parts.second ?? 0);
-  const d2 = new Date(base + days * 86400000);
-  const tz = "America/New_York";
-  return toZonedParts(d2, tz);
-}
-
-function zonedDateToUnix(parts, timeZone) {
-  const guess = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour ?? 0, parts.minute ?? 0, parts.second ?? 0);
-  const offsetMin = tzOffsetMinutes(timeZone, guess);
-  const ms = guess - offsetMin * 60000;
-  return Math.floor(ms / 1000);
-}
-
-function tzOffsetMinutes(timeZone, epochMs) {
-  const dtf = getDTF(timeZone);
-  const parts = dtf.formatToParts(new Date(epochMs));
-  const map = Object.fromEntries(parts.map(p => [p.type, p.value]));
-  const asUtc = Date.UTC(
-    Number(map.year),
-    Number(map.month) - 1,
-    Number(map.day),
-    Number(map.hour),
-    Number(map.minute),
-    Number(map.second)
-  );
-  return (asUtc - epochMs) / 60000;
-}
-
-const dtfCache = new Map();
-function getDTF(timeZone) {
-  if (!dtfCache.has(timeZone)) {
-    dtfCache.set(
-      timeZone,
-      new Intl.DateTimeFormat("en-US", {
-        timeZone,
-        hour12: false,
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      })
-    );
-  }
-  return dtfCache.get(timeZone);
 }
 
 /** ---- Discord Webhook helpers ---- */
