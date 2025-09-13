@@ -1,10 +1,9 @@
 // The Division 2 – Vendors Status (Variant A: deterministic cron)
 // Runs on GitHub Actions (Node 20). No scraping. Edits ONE Discord webhook message.
 // First run (no DISCORD_MESSAGE_ID): posts a new message and prints its ID in logs.
-// Copy that ID into GitHub Secret DISCORD_MESSAGE_ID, and from then on the script edits the same message.
 
 const WEBHOOK_URL = process.env.DISCORD_WEBHOOK_URL; // required (secret)
-const MESSAGE_ID  = process.env.DISCORD_MESSAGE_ID || ""; // optional (secret). If empty, script will create a new message.
+const MESSAGE_ID  = process.env.DISCORD_MESSAGE_ID || ""; // optional (secret)
 
 if (!WEBHOOK_URL) {
   console.error("Missing DISCORD_WEBHOOK_URL secret");
@@ -46,7 +45,7 @@ if (!WEBHOOK_URL) {
       }
     }
   } catch (err) {
-    console.error(err);
+    console.error("FATAL:", err?.stack || err);
     process.exit(1);
   }
 })();
@@ -214,8 +213,9 @@ async function createWebhookMessage(webhookUrl, body, waitJson = false) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`Webhook POST failed: ${res.status}`);
-  return waitJson ? res.json() : true;
+  const txt = await res.text().catch(() => "");
+  if (!res.ok) throw new Error(`Webhook POST failed: ${res.status} ${txt}`);
+  return waitJson ? JSON.parse(txt || "{}") : true;
 }
 
 async function editWebhookMessage(webhookUrl, messageId, body) {
@@ -228,6 +228,7 @@ async function editWebhookMessage(webhookUrl, messageId, body) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(`Webhook PATCH failed: ${res.status}`);
+  const txt = await res.text().catch(() => "");
+  if (!res.ok) throw new Error(`Webhook PATCH failed: ${res.status} ${txt}`);
   return true;
 }
